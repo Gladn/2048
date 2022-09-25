@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Unity.VisualScripting;
 using UnityEditor.Experimental.GraphView;
@@ -19,6 +20,8 @@ public class GameManager : MonoBehaviour
 
     private List<Node> nodes;
     private List<Block> blocks;
+    private GameStats stats;
+    private int gameRound = 0;
 
     private BlockType GetBlockTypeValue(int value) => blockTypes.First(t => t.value == value);
 
@@ -26,7 +29,34 @@ public class GameManager : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
-        GenerateGrid();
+        ChangeStats(GameStats.GenerateLevel);
+    }
+
+    private void ChangeStats(GameStats newStats)
+    {
+        stats = newStats;
+
+        switch (newStats)
+        {
+            case GameStats.GenerateLevel:
+                GenerateGrid();
+                break;
+            case GameStats.SpawningBlocks:
+                SpawnBlocks(UnityEngine.Random.value > 0.3f || gameRound++ == 0 ? 2 : 1);
+                break;
+            case GameStats.WaitingInput:
+                break;
+            case GameStats.Moving:
+                break;
+            case GameStats.Win:
+                break;
+            case GameStats.Lose:
+                break;           
+            default:
+                throw new ArgumentOutOfRangeException(nameof(newStats), newStats, null);
+
+
+        }
     }
 
     void GenerateGrid() {
@@ -49,7 +79,8 @@ public class GameManager : MonoBehaviour
 
         Camera.main.transform.position = new Vector3(centerScreen.x, centerScreen.y, -10);
 
-        SpawnBlocks(2);
+        //SpawnBlocks(2);
+        ChangeStats(GameStats.SpawningBlocks);
     }
 
     void SpawnBlocks(int amount)
@@ -80,4 +111,14 @@ public struct BlockType
 {
     public int value;
     public Color Color;
+}
+
+public enum GameStats
+{
+    GenerateLevel,
+    SpawningBlocks,
+    WaitingInput,
+    Moving,
+    Win,
+    Lose
 }
