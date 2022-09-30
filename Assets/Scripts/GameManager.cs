@@ -1,13 +1,9 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using Unity.VisualScripting;
-using UnityEditor.Experimental.GraphView;
 using UnityEngine;
-
+using DG.Tweening;
+using System.Threading;
 
 public class GameManager : MonoBehaviour
 {
@@ -17,11 +13,19 @@ public class GameManager : MonoBehaviour
     [SerializeField] private Block blockPrefab;
     [SerializeField] private SpriteRenderer boardPrefab;
     [SerializeField] private List<BlockType> blockTypes;
+    [SerializeField] private float travel = 0.2f;
+    [SerializeField] private int winCondition = 2048;
+
+    [SerializeField] private GameObject winScreen;
+    [SerializeField] private GameObject loseScreen;
 
     private List<Node> nodes;
     private List<Block> blocks;
     private GameStats stats;
     private int gameRound = 0;
+    private Vector2 firstPressPos;
+    private Vector2 secondPressPos;
+    private Vector2 currentSwipe;
 
     private BlockType GetBlockTypeValue(int value) => blockTypes.First(t => t.value == value);
 
@@ -31,6 +35,19 @@ public class GameManager : MonoBehaviour
     {
         ChangeStats(GameStats.GenerateLevel);
     }
+
+
+    void Update()
+    {
+        if (stats != GameStats.WaitingInput) return;
+        
+        Swipe();
+        if (Input.GetKeyDown(KeyCode.LeftArrow)) Shift(Vector2.left);
+        if (Input.GetKeyDown(KeyCode.RightArrow)) Shift(Vector2.right);
+        if (Input.GetKeyDown(KeyCode.UpArrow)) Shift(Vector2.up);
+        if (Input.GetKeyDown(KeyCode.DownArrow)) Shift(Vector2.down);
+    }
+
 
     private void ChangeStats(GameStats newStats)
     {
@@ -42,22 +59,24 @@ public class GameManager : MonoBehaviour
                 GenerateGrid();
                 break;
             case GameStats.SpawningBlocks:
-                SpawnBlocks(UnityEngine.Random.value > 0.3f || gameRound++ == 0 ? 2 : 1);
+                //SpawnBlocks(UnityEngine.Random.value > 0.8f || gameRound++ == 0 ? 2 : 1);
+                SpawnBlocks(gameRound++ == 0 ? 2 : 1); 
                 break;
-            case GameStats.WaitingInput:
+            case GameStats.WaitingInput:                
                 break;
             case GameStats.Moving:
                 break;
             case GameStats.Win:
+                winScreen.SetActive(true);
                 break;
             case GameStats.Lose:
+                loseScreen.SetActive(true);
                 break;           
             default:
                 throw new ArgumentOutOfRangeException(nameof(newStats), newStats, null);
-
-
         }
     }
+
 
     void GenerateGrid() {
         nodes = new List<Node>();
@@ -83,14 +102,14 @@ public class GameManager : MonoBehaviour
         ChangeStats(GameStats.SpawningBlocks);
     }
 
+
     void SpawnBlocks(int amount)
     {
         var freeNodes = nodes.Where(n => n.ocupiedBlock == null).OrderBy(b => UnityEngine.Random.value);
 
         foreach (var node in freeNodes.Take(amount))
         {
-            var block = Instantiate(blockPrefab, node.Pos, Quaternion.identity);
-            block.Init(GetBlockTypeValue(UnityEngine.Random.value > 0.9f ? 4 : 2)); ;
+            SpawnBlocks(node, UnityEngine.Random.value > 0.9f ? 4 : 2);
         }
 
         //for (int i = 0; i<amount; i++)
@@ -98,12 +117,118 @@ public class GameManager : MonoBehaviour
         //    var block = Instantiate(blockPrefab);
         //}
 
-        if (freeNodes.Count() == 1) //game lost
+        if (freeNodes.Count() == 0) 
         {
+            ChangeStats(GameStats.Lose);
             return;
         }
+
+        ChangeStats(blocks.Any(b => b.Value == winCondition) ? GameStats.Win : GameStats.WaitingInput);
     }
 
+
+    void SpawnBlocks(Node node, int value)
+    {
+        var block = Instantiate(blockPrefab, node.Pos, Quaternion.identity);
+        block.Init(GetBlockTypeValue(value));
+        block.setBlock(node);
+        blocks.Add(block);
+    }
+
+
+    void Shift(Vector2 dir)
+    {
+        ChangeStats(GameStats.Moving);
+        var orderedBlocks = blocks.OrderBy(b => b.Pos.x).ThenBy(b => b.Pos.y).ToList();
+        if (dir == Vector2.right || dir == Vector2.up) orderedBlocks.Reverse();
+
+        foreach (var block in orderedBlocks)
+        {
+            var next = block.Node;
+            do
+            {
+                block.setBlock(next);
+                var possibleNode = GetNodePosition(next.Pos + dir);
+                if (possibleNode != null)
+                {
+                    // node is present
+                    if (possibleNode.ocupiedBlock != null && possibleNode.ocupiedBlock.CanMerge(block.Value))
+                    {
+                        //block.MergingBlock = possibleNode.ocupiedBlock;
+                        block.MergeBlock(possibleNode.ocupiedBlock);
+                    }
+                    else if (possibleNode.ocupiedBlock == null) next = possibleNode;
+                }               
+            } while (next != block.Node);
+
+            //block.transform.position = block.Node.Pos;
+        }
+
+        var sequence = DOTween.Sequence();
+
+        foreach (var block in orderedBlocks)
+        {
+            var movePoint = block.MergingBlock != null ? block.MergingBlock.Node.Pos : block.Node.Pos;
+
+            sequence.Insert(0, block.transform.DOMove(movePoint, travel).SetEase(Ease.InQuad));           
+        }
+
+        sequence.OnComplete(() =>
+        {
+            foreach (var block in orderedBlocks.Where(b => b.MergingBlock != null))
+            {
+                MergeBlocks(block.MergingBlock, block);
+            }
+        });
+
+        
+        ChangeStats(GameStats.SpawningBlocks);
+    }
+
+
+    void MergeBlocks(Block baseBlock, Block mergingBlock)
+    {
+        SpawnBlocks(baseBlock.Node, baseBlock.Value * 2);
+        RemoveBlock(mergingBlock);
+        RemoveBlock(baseBlock);
+    }
+
+
+    void RemoveBlock(Block block)
+    {
+        blocks.Remove(block);
+        Destroy(block.gameObject);
+    }
+       
+
+    Node GetNodePosition(Vector2 pos)
+    {
+        return nodes.FirstOrDefault(n => n.Pos == pos);
+    }
+
+
+    void Swipe()
+    {
+        if (Input.touches.Length > 0)
+        {
+            Touch t = Input.GetTouch(0);
+            if (t.phase == TouchPhase.Began)
+            {
+                firstPressPos = new Vector2(t.position.x, t.position.y);
+            }
+            if (t.phase == TouchPhase.Ended)
+            {
+                secondPressPos = new Vector2(t.position.x, t.position.y);
+                currentSwipe = new Vector3(secondPressPos.x - firstPressPos.x, secondPressPos.y - firstPressPos.y);
+                currentSwipe.Normalize();
+                if (currentSwipe.y > 0 && currentSwipe.x > -0.5f && currentSwipe.x < 0.5f)  Shift(Vector2.up);      
+                if (currentSwipe.y < 0 && currentSwipe.x > -0.5f && currentSwipe.x < 0.5f)  Shift(Vector2.down);                            
+                if (currentSwipe.x < 0 && currentSwipe.y > -0.5f && currentSwipe.y < 0.5f)  Shift(Vector2.left);             
+                if (currentSwipe.x > 0 && currentSwipe.y > -0.5f && currentSwipe.y < 0.5f)  Shift(Vector2.right);
+
+            }
+        }
+    }   
 }
 
 [Serializable]
